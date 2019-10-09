@@ -27,6 +27,8 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Condition;
 
+import io.netty.util.Timeout;
+import io.netty.util.TimerTask;
 import org.redisson.api.RFuture;
 import org.redisson.api.RLock;
 import org.redisson.client.RedisException;
@@ -42,9 +44,6 @@ import org.redisson.misc.RedissonPromise;
 import org.redisson.pubsub.LockPubSub;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import io.netty.util.Timeout;
-import io.netty.util.TimerTask;
 
 /**
  * Distributed implementation of {@link java.util.concurrent.locks.Lock}
@@ -335,19 +334,27 @@ public class RedissonLock extends RedissonExpirable implements RLock {
     <T> RFuture<T> tryLockInnerAsync(long leaseTime, TimeUnit unit, long threadId, RedisStrictCommand<T> command) {
         internalLockLeaseTime = unit.toMillis(leaseTime);
 
+        /* vergilyn 2019-10-08
+         * 返回nil, 表示当前线程成功获取lock；否则，返回lock的剩余时长
+         * KEYS[1]: "{lock_name}"
+         * ARGV[1]: {leaseTime} (ms)
+         * ARGV[2]: "{RedissonLock.UUID}:{threadId}"
+         */
         return commandExecutor.evalWriteAsync(getName(), LongCodec.INSTANCE, command,
-                  "if (redis.call('exists', KEYS[1]) == 0) then " +
-                      "redis.call('hset', KEYS[1], ARGV[2], 1); " +
-                      "redis.call('pexpire', KEYS[1], ARGV[1]); " +
-                      "return nil; " +
-                  "end; " +
-                  "if (redis.call('hexists', KEYS[1], ARGV[2]) == 1) then " +
-                      "redis.call('hincrby', KEYS[1], ARGV[2], 1); " +
-                      "redis.call('pexpire', KEYS[1], ARGV[1]); " +
-                      "return nil; " +
-                  "end; " +
-                  "return redis.call('pttl', KEYS[1]);",
-                    Collections.<Object>singletonList(getName()), internalLockLeaseTime, getLockName(threadId));
+                        // 锁未被任何线程获取, 则当前线程成功获取锁
+                "if (redis.call('exists', KEYS[1]) == 0) then " +
+                          "redis.call('hset', KEYS[1], ARGV[2], 1); " +
+                          "redis.call('pexpire', KEYS[1], ARGV[1]); " +
+                          "return nil; " +
+                        "end; " +
+                        // (重复获取锁) 当前线程即持有锁的线程, 即可重入锁(Reentrant Lock)
+                        "if (redis.call('hexists', KEYS[1], ARGV[2]) == 1) then " +
+                          "redis.call('hincrby', KEYS[1], ARGV[2], 1); " + // 获取次数递增, 必须相应的释放这么多次锁
+                          "redis.call('pexpire', KEYS[1], ARGV[1]); " + // 每次获取锁都重置失效时长
+                          "return nil; " +
+                        "end; " +
+                        "return redis.call('pttl', KEYS[1]);",    // 锁已被其他线程获取, 返回锁的剩余有效时长
+                Collections.<Object>singletonList(getName()), internalLockLeaseTime, getLockName(threadId));
     }
     
     private void acquireFailed(long threadId) {
