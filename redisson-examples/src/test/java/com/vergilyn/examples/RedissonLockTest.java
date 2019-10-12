@@ -2,6 +2,8 @@ package com.vergilyn.examples;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
@@ -11,6 +13,7 @@ import com.vergilyn.examples.redisson.RedissonApplication;
 import com.vergilyn.examples.redisson.exception.RedissonException;
 import com.vergilyn.examples.redisson.template.client.FairLockClient;
 
+import lombok.extern.slf4j.Slf4j;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.redisson.api.RFuture;
@@ -20,50 +23,24 @@ import org.springframework.test.context.junit4.SpringRunner;
 
 @RunWith(SpringRunner.class)
 @SpringBootTest(classes= RedissonApplication.class)
+@Slf4j
 public class RedissonLockTest {
-	private Semaphore semaphore = new Semaphore(0);
+	ExecutorService executorService = Executors.newFixedThreadPool(10);
 	@Resource
     FairLockClient fairLockClient;
-
-	@Test
-	public void basicTest(){
-		RLock rLock = fairLockClient.newInstance("test_100000086");
-		rLock.lock();
-
-		try {
-			semaphore.tryAcquire(5, TimeUnit.SECONDS);
-		} catch (InterruptedException e) {
-			e.printStackTrace();
-		} finally {
-			rLock.unlock();
-		}
-
-
-		RLock rLock2 = fairLockClient.newInstance("test_100000080");
-		rLock2.lock();
-
-		try {
-			semaphore.tryAcquire(5, TimeUnit.SECONDS);
-		} catch (InterruptedException e) {
-			e.printStackTrace();
-		}finally {
-			rLock2.unlock();
-		}
-
-	}
 	
 	@Test
-	public void test(){
+	public void basicTest(){
 		int count = 40;
 		CountDownLatch latch = new CountDownLatch(count);
 		
 		for (int i = 0; i < count; i++) {
-			new LockThread(fairLockClient, latch).start();
+			executorService.submit(() -> lock(latch));
 		}
-		
+
 		try {
 			latch.await();
-			System.out.println("11111111111");
+			log.info("basicTest() execute finish....");
 		} catch (InterruptedException e) {
 			e.printStackTrace();
 		}
@@ -75,26 +52,20 @@ public class RedissonLockTest {
 		final CountDownLatch latch = new CountDownLatch(count);
 		
 		for (int i = 0; i < count; i++) {
-			new Thread(){
-				public void run(){
-					Long template = fairLockClient.tryTemplate("test", 100, 30, TimeUnit.SECONDS, () -> {
-						long index = Thread.currentThread().getId();
-						System.out.println(index + ": begin....");
+			executorService.submit(() -> fairLockClient.tryTemplate("test", 100, 30, TimeUnit.SECONDS, () -> {
+				log.info("lock....");
 
-						Semaphore semaphore = new Semaphore(0);
-						try {
-							semaphore.tryAcquire(5, TimeUnit.SECONDS);
-							System.out.println(index + ": end....");
-						} catch (InterruptedException e) {
-							e.printStackTrace();
-						} finally {
-							latch.countDown();
-						}
-						return index;
-					});
-					System.out.println(template);
+				try {
+					new Semaphore(0).tryAcquire(5 , TimeUnit.SECONDS);  // 代码执行5s
+				} catch (InterruptedException e) {
+					// do nothing
+				} finally {
+					latch.countDown();
+					log.info("await release lock....");
 				}
-			}.start();
+
+				return null;
+			}));
 		}
 		
 		try {
@@ -122,52 +93,35 @@ public class RedissonLockTest {
 
 				rLock.unlock();
 				// rLock.unlockAsync();
-
-			}else{
-				throw new RedissonException("获取锁失败, 可能原因: 等待获取锁超时, lock: test ");
 			}
 
+			throw new RedissonException("获取锁失败, 可能原因: 等待获取锁超时, lock: test ");
 		} catch (InterruptedException | ExecutionException e) {
 			e.printStackTrace();
 
+		} finally {
 			if(rLock.isHeldByCurrentThread()){
 				rLock.unlock();
 			}
 		}
 
 	}
-}
 
-class LockThread extends Thread {
-	
-	private FairLockClient fairLockClient;
-	private CountDownLatch latch;
-	private Semaphore semaphore;
-	
-	public LockThread(FairLockClient fairLockClient, CountDownLatch latch){
-		this.fairLockClient = fairLockClient;
-		this.latch = latch;
-		this.semaphore = new Semaphore(0);
-	}
-	
-	@Override
-	public void run() {
-		long index = Thread.currentThread().getId();
-		
-		System.out.println(index + ": await lock....");
+	private void lock(CountDownLatch latch){
+		log.info("await lock....");
 
 		RLock fairLock = fairLockClient.newInstance("test");
-		System.out.println(index + ": lock....");
+		fairLock.lock(10, TimeUnit.SECONDS);
+		log.info("lock....");
 
 		try {
-			semaphore.tryAcquire(5 , TimeUnit.SECONDS);
-			System.out.println(index + ": unlock....");
+			new Semaphore(0).tryAcquire(5 , TimeUnit.SECONDS);  // 代码执行5s
 		} catch (InterruptedException e) {
-			e.printStackTrace();
+			// do nothing
 		} finally {
 			fairLock.unlock();
 			latch.countDown();
+			log.info("unlock....");
 		}
 	}
-	
 }

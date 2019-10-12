@@ -106,16 +106,16 @@ public class RedissonLockAOP {
                         }
                         return key.substring(0, key.length() - 1);
                     } catch (NoSuchFieldException e) {
-                        e.printStackTrace();
                         throw new RedissonException(String.format("object not exists field: [%s]", field));
                     } catch (SecurityException e){
-                        e.printStackTrace();
                         throw new RedissonException(e);
                     }
                 }
             }
         }
+        // return System.currentTimeMillis() + "";
         return "";
+
     }
 
 }
