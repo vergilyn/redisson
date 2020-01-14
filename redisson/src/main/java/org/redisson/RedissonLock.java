@@ -108,10 +108,16 @@ public class RedissonLock extends RedissonExpirable implements RLock {
     }
     
     private static final Logger log = LoggerFactory.getLogger(RedissonLock.class);
-    
+    /* vergilyn mark: <br/>
+     * 标记已存在的 expiration-renewal TimerTask, 防止重复的TimerTask
+     */
     private static final ConcurrentMap<String, ExpirationEntry> EXPIRATION_RENEWAL_MAP = new ConcurrentHashMap<>();
     protected long internalLockLeaseTime;
 
+    /**
+     * vergilyn mark: <br/>
+     * 可以理解成 一个应用实例中只有一个redisson实例，一个redisson实例中的redisson.id是唯一的，用于区分不同应用实例。
+     */
     final String id;
     final String entryName;
 
